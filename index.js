@@ -1,38 +1,66 @@
-require('dotenv').config({ debug: true });  // Hiển thị lỗi nếu có
-console.log('Stripe Key:', process.env.STRIPE_SECRET_KEY?.slice(0, 8) + '...');
 const express = require('express');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
-require('dotenv').config();
+
+// Load .env only if not in Render
+if (!process.env.RENDER) {
+  require('dotenv').config({ debug: true });
+}
+
+// Initialize Stripe after dotenv
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+console.log('Stripe Key:', process.env.STRIPE_SECRET_KEY?.slice(0, 8) + '...');
 
 const app = express();
-const port = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors()); // Cho phép ứng dụng Android gửi yêu cầu
-app.use(express.json()); // Parse JSON body
+app.use(cors());
+app.use(express.json());
 
-// Endpoint để tạo PaymentIntent
-app.post('/create-payment-intent', async (req, res) => {
-    const { amount, currency } = req.body;
-
-    try {
-        // Tạo PaymentIntent với Stripe
-        const paymentIntent = await stripe.paymentIntents.create({
-            amount: amount, // Số tiền (ví dụ: 10000 = 100.00 VND)
-            currency: currency, // Mã tiền tệ (ví dụ: "vnd")
-            payment_method_types: ['card'], // Chỉ chấp nhận thẻ
-        });
-
-        // Trả về clientSecret cho ứng dụng Android
-        res.json({ clientSecret: paymentIntent.client_secret });
-    } catch (error) {
-        console.error('Lỗi khi tạo PaymentIntent:', error.message);
-        res.status(500).json({ error: error.message });
-    }
+// Health check
+app.get('/', (req, res) => {
+  res.json({ status: 'Server is running', stripeKeySet: !!process.env.STRIPE_SECRET_KEY });
 });
 
-// Khởi động server
-app.listen(port, () => {
-    console.log(`Server chạy tại http://localhost:${port}`);
+// Create PaymentIntent
+app.post('/create-payment-intent', async (req, res) => {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    console.error('STRIPE_SECRET_KEY is not set');
+    return res.status(500).json({ error: 'Server configuration error: Missing Stripe key' });
+  }
+
+  const { amount, currency } = req.body;
+
+  if (!amount || !currency) {
+    console.error('Missing amount or currency:', req.body);
+    return res.status(400).json({ error: 'Missing amount or currency' });
+  }
+
+  if (typeof amount !== 'number' || amount <= 0) {
+    console.error('Invalid amount:', amount);
+    return res.status(400).json({ error: 'Amount must be a positive number' });
+  }
+
+  if (currency !== 'vnd') {
+    console.error('Unsupported currency:', currency);
+    return res.status(400).json({ error: 'Only VND is supported' });
+  }
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount), // VND, no decimals
+      currency,
+      payment_method_types: ['card'],
+    });
+
+    res.json({ clientSecret: paymentIntent.client_secret });
+  } catch (error) {
+    console.error('Error creating PaymentIntent:', error.message, error.stack);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Server running at http://0.0.0.0:${port}`);
 });
